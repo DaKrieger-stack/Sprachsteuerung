@@ -12,6 +12,9 @@ Thumbs.db
 
 # Logs
 *.log
+# data 
+data/
+*.wav
 
 # Common build and dependency directories
 node_modules/
