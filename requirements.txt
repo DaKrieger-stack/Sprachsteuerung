@@ -1,0 +1,8 @@
+numpy==2.4.0
+matplotlib==3.10.8
+pandas
+librosa
+numpy
+tensorflow
+scikit-learn
+sounddevice
