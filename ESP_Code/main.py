@@ -37,7 +37,7 @@ class App:
         self.last_score = 0.0
         gc.collect()
 
-    def run(self):
+    def run(self): #switch-case 
         while True:
             if self.state == STATE_IDLE:
                 if self.button.update():

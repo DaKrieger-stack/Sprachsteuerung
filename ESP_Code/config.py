@@ -2,15 +2,17 @@ from micropython import const
 
 
 # Button / GPIO
-BUTTON_PIN = const(0)
+BUTTON_PIN = const(39) 
 BUTTON_ACTIVE_LOW = const(1)
 DEBOUNCE_MS = const(180)
 
 # I2S microphone pins (example wiring for SPH0645 / similar)
 I2S_ID = const(0)
-I2S_SCK_PIN = const(26)
-I2S_WS_PIN = const(25)
-I2S_SD_PIN = const(33)
+
+I2S_SCK_PIN = const(17)   # BCLK
+I2S_WS_PIN  = const(18)   # LRCL
+I2S_SD_PIN  = const(21)   # DOUT
+
 I2S_BUFFER_BYTES = const(4096)
 I2S_BITS = const(32)
 
