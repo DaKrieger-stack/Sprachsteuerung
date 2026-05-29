@@ -2,71 +2,139 @@ import gc
 import time
 
 import config
-from audio_capture import AudioCapture, create_sample_buffer
-from button_handler import ButtonHandler
-from classifier import Classifier
-from inference import CNNInference
-from model_loader import ModelLoader
+from audio_capture import AudioCapture
+from classifier import TemplateClassifier
 from output_control import OutputControl
-from preprocess import MFCCExtractor
+from preprocess import LogMelExtractor, flatten_feature_matrix, rms_level
+from template_store import TemplateStore
 
 
-STATE_IDLE = 0
-STATE_TRIGGERED = 1
-STATE_PROCESSING = 2
-STATE_OUTPUT = 3
-
-
-class App:
+class VoiceCommandApp:
     def __init__(self):
         gc.collect()
-        self.state = STATE_IDLE
         self.audio = AudioCapture()
-        self.samples = create_sample_buffer()
-        self.button = ButtonHandler(
-            config.BUTTON_PIN,
-            config.DEBOUNCE_MS,
-            active_low=bool(config.BUTTON_ACTIVE_LOW),
-        )
-        self.mfcc = MFCCExtractor()
+        self.extractor = LogMelExtractor()
         self.outputs = OutputControl()
-        self.classifier = Classifier(self.outputs)
-        self.model = ModelLoader(config.MODEL_PATH).load()
-        self.inference = CNNInference(self.model)
-        self.last_class = None
-        self.last_score = 0.0
+        self.store = TemplateStore()
+        self.templates = self.store.load()
+        self.classifier = TemplateClassifier(self.templates)
         gc.collect()
 
-    def run(self): #switch-case 
+    def reload_templates(self):
+        self.templates = self.store.load()
+        self.classifier.update_templates(self.templates)
+
+    def capture_features(self):
+        samples = self.audio.read_frame()
+        level = rms_level(samples)
+        matrix = self.extractor.extract(samples)
+        vector = flatten_feature_matrix(matrix)
+        return level, matrix, vector
+
+    def infer_once(self, verbose=True):
+        level, _, vector = self.capture_features()
+        if level < config.MIN_SIGNAL_RMS:
+            if verbose:
+                print("ignored: low signal, rms=", level)
+            return None
+
+        result = self.classifier.classify(vector)
+        label = result["label"]
+        if label is not None:
+            self.outputs.apply(label)
+            if verbose:
+                print(
+                    "detected=",
+                    label,
+                    "score=",
+                    result["best_score"],
+                    "margin=",
+                    result["margin"],
+                    "licht=",
+                    self.outputs.state(),
+                )
+        elif verbose:
+            print(
+                "ignored: no confident match, scores=",
+                result["class_scores"],
+                "margin=",
+                result["margin"],
+            )
+        return result
+
+    def listen_forever(self):
+        print("voice loop active")
+        print("templates on=", len(self.templates[config.COMMAND_ON]), "off=", len(self.templates[config.COMMAND_OFF]))
         while True:
-            if self.state == STATE_IDLE:
-                if self.button.update():
-                    self.state = STATE_TRIGGERED
-                else:
-                    time.sleep_ms(10)
+            self.infer_once(verbose=True)
+            gc.collect()
 
-            elif self.state == STATE_TRIGGERED:
-                self.button.set_enabled(False)
-                gc.collect()
-                self.audio.capture_into(self.samples)
-                self.state = STATE_PROCESSING
+    def record_template(self, label, countdown_s=2):
+        print("prepare sample for", label)
+        for remaining in range(countdown_s, 0, -1):
+            print("recording starts in", remaining)
+            time.sleep(1)
 
-            elif self.state == STATE_PROCESSING:
-                mfcc_matrix = self.mfcc.extract(self.samples)
-                self.last_class, self.last_score, _ = self.inference.forward(mfcc_matrix)
-                print("class=", self.last_class, "label=", config.CLASS_LABELS.get(self.last_class, "?"), "score=", self.last_score)
-                self.state = STATE_OUTPUT
-                gc.collect()
+        level, _, vector = self.capture_features()
+        if level < config.MIN_SIGNAL_RMS:
+            print("sample rejected, rms too low:", level)
+            return False
 
-            elif self.state == STATE_OUTPUT:
-                self.classifier.execute(self.last_class)
-                self.button.set_enabled(True)
-                self.state = STATE_IDLE
+        self.store.add_template(label, vector)
+        self.reload_templates()
+        print("stored template for", label, "rms=", level, "count=", len(self.templates[label]))
+        return True
+
+    def average_templates(self, label):
+        if self.store.average_class(label):
+            self.reload_templates()
+            print("averaged templates for", label)
+            return True
+        print("no templates available for", label)
+        return False
+
+    def clear_templates(self, label=None):
+        self.store.clear(label)
+        self.reload_templates()
+        if label is None:
+            print("cleared all templates")
+        else:
+            print("cleared templates for", label)
+
+    def train_interactive(self):
+        print("training mode")
+        print("commands: on, off, avg_on, avg_off, clear_on, clear_off, clear_all, listen, exit")
+        while True:
+            cmd = input("> ").strip().lower()
+            if cmd == "on":
+                self.record_template(config.COMMAND_ON)
+            elif cmd == "off":
+                self.record_template(config.COMMAND_OFF)
+            elif cmd == "avg_on":
+                self.average_templates(config.COMMAND_ON)
+            elif cmd == "avg_off":
+                self.average_templates(config.COMMAND_OFF)
+            elif cmd == "clear_on":
+                self.clear_templates(config.COMMAND_ON)
+            elif cmd == "clear_off":
+                self.clear_templates(config.COMMAND_OFF)
+            elif cmd == "clear_all":
+                self.clear_templates()
+            elif cmd == "listen":
+                self.listen_forever()
+            elif cmd == "exit":
+                break
+            else:
+                print("unknown command")
 
 
-def main():
-    app = App()
-    app.run()
+def main(training=False):
+    app = VoiceCommandApp()
+    if training:
+        app.train_interactive()
+    else:
+        app.listen_forever()
 
 
-main()
+if __name__ == "__main__":
+    main()

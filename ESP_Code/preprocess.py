@@ -4,16 +4,14 @@ from array import array
 import config
 
 
-class MFCCExtractor:
+class LogMelExtractor:
     def __init__(self):
         self.frame_len = config.FRAME_LEN
         self.hop_len = config.HOP_LEN
         self.n_fft = config.N_FFT
         self.num_mels = config.NUM_MELS
-        self.num_mfcc = config.NUM_MFCC
         self.frame_count = config.FRAME_COUNT
         self.pre_emphasis = config.PRE_EMPHASIS
-
         self.window = self._build_hamming_window(self.frame_len)
         self.frame_buffer = array("f", [0.0] * self.n_fft)
         self.imag_buffer = array("f", [0.0] * self.n_fft)
@@ -23,8 +21,7 @@ class MFCCExtractor:
         self._twiddle_sin = array("f", [0.0] * (self.n_fft // 2))
         self._build_twiddles()
         self.mel_filters = self._build_mel_filterbank()
-        self.dct_matrix = self._build_dct_matrix()
-        self.output = [array("f", [0.0] * self.num_mfcc) for _ in range(self.frame_count)]
+        self.output = [array("f", [0.0] * self.num_mels) for _ in range(self.frame_count)]
 
     def _build_hamming_window(self, length):
         window = array("f", [0.0] * length)
@@ -40,14 +37,14 @@ class MFCCExtractor:
             self._twiddle_sin[k] = math.sin(angle)
 
     def _hz_to_mel(self, hz):
-        return 2595.0 * math.log10(1.0 + (hz / 700.0))
+        return 2595.0 * math.log10(1.0 + hz / 700.0)
 
     def _mel_to_hz(self, mel):
         return 700.0 * ((10.0 ** (mel / 2595.0)) - 1.0)
 
     def _build_mel_filterbank(self):
-        min_mel = self._hz_to_mel(config.MFCC_MIN_HZ)
-        max_mel = self._hz_to_mel(config.MFCC_MAX_HZ)
+        min_mel = self._hz_to_mel(config.MEL_MIN_HZ)
+        max_mel = self._hz_to_mel(config.MEL_MAX_HZ)
         mel_points = [0.0] * (self.num_mels + 2)
         bin_points = [0] * (self.num_mels + 2)
         mel_step = (max_mel - min_mel) / (self.num_mels + 1)
@@ -80,16 +77,6 @@ class MFCCExtractor:
                 weights.append((k, (right - k) / float(right - center)))
             filters.append(weights)
         return filters
-
-    def _build_dct_matrix(self):
-        matrix = []
-        scale = math.sqrt(2.0 / self.num_mels)
-        for i in range(self.num_mfcc):
-            row = array("f", [0.0] * self.num_mels)
-            for j in range(self.num_mels):
-                row[j] = scale * math.cos((math.pi * i * (j + 0.5)) / self.num_mels)
-            matrix.append(row)
-        return matrix
 
     def _fft_inplace(self):
         n = self.n_fft
@@ -154,7 +141,7 @@ class MFCCExtractor:
             imag = self.imag_buffer[i]
             self.power_buffer[i] = (real * real + imag * imag) / self.n_fft
 
-    def _apply_mel_filterbank(self):
+    def _apply_mel_filterbank(self, out_vec):
         for m in range(self.num_mels):
             acc = 0.0
             filt = self.mel_filters[m]
@@ -162,15 +149,29 @@ class MFCCExtractor:
                 acc += self.power_buffer[pair[0]] * pair[1]
             if acc < 1e-10:
                 acc = 1e-10
-            self.mel_buffer[m] = math.log(acc)
+            out_vec[m] = math.log(acc)
 
-    def _compute_mfcc(self, out_vec):
-        for i in range(self.num_mfcc):
-            acc = 0.0
-            row = self.dct_matrix[i]
-            for j in range(self.num_mels):
-                acc += row[j] * self.mel_buffer[j]
-            out_vec[i] = acc
+    def _normalize_inplace(self):
+        total = 0.0
+        count = self.frame_count * self.num_mels
+        for frame in self.output:
+            for value in frame:
+                total += value
+        mean = total / count
+
+        variance = 0.0
+        for frame in self.output:
+            for value in frame:
+                delta = value - mean
+                variance += delta * delta
+        std = math.sqrt(variance / count)
+        if std < 1e-6:
+            std = 1.0
+
+        inv_std = 1.0 / std
+        for frame in self.output:
+            for i in range(self.num_mels):
+                frame[i] = (frame[i] - mean) * inv_std
 
     def extract(self, samples):
         for frame_idx in range(self.frame_count):
@@ -178,7 +179,24 @@ class MFCCExtractor:
             self._fill_frame(samples, start)
             self._fft_inplace()
             self._power_spectrum()
-            self._apply_mel_filterbank()
-            self._compute_mfcc(self.output[frame_idx])
+            self._apply_mel_filterbank(self.output[frame_idx])
+        self._normalize_inplace()
         return self.output
+
+
+def flatten_feature_matrix(matrix):
+    flat = array("f", [0.0] * (len(matrix) * len(matrix[0])))
+    idx = 0
+    for row in matrix:
+        for value in row:
+            flat[idx] = value
+            idx += 1
+    return flat
+
+
+def rms_level(samples):
+    acc = 0.0
+    for sample in samples:
+        acc += sample * sample
+    return math.sqrt(acc / len(samples))
 

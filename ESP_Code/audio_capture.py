@@ -6,7 +6,8 @@ import config
 
 class AudioCapture:
     def __init__(self):
-        self._raw_chunk = bytearray(config.CHUNK_SAMPLES * 4)
+        bytes_per_sample = 4 if config.I2S_BITS > 16 else 2
+        self._raw_chunk = bytearray(config.CHUNK_SAMPLES * bytes_per_sample)
         self._i2s = I2S(
             config.I2S_ID,
             sck=Pin(config.I2S_SCK_PIN),
@@ -22,40 +23,49 @@ class AudioCapture:
     def deinit(self):
         self._i2s.deinit()
 
+    def _decode_sample(self, raw, base):
+        if config.I2S_BITS > 16:
+            word = (
+                raw[base]
+                | (raw[base + 1] << 8)
+                | (raw[base + 2] << 16)
+                | (raw[base + 3] << 24)
+            )
+            if word & 0x80000000:
+                word -= 0x100000000
+            sample = word >> 14
+        else:
+            sample = raw[base] | (raw[base + 1] << 8)
+            if sample & 0x8000:
+                sample -= 0x10000
+
+        if sample > 32767:
+            return 32767
+        if sample < -32768:
+            return -32768
+        return sample
+
     def capture_into(self, target_samples):
         sample_index = 0
-        total_samples = len(target_samples)
+        bytes_per_sample = 4 if config.I2S_BITS > 16 else 2
         raw = self._raw_chunk
 
-        while sample_index < total_samples:
+        while sample_index < len(target_samples):
             bytes_read = self._i2s.readinto(raw)
             if not bytes_read:
                 continue
 
-            limit = bytes_read // 4
+            limit = bytes_read // bytes_per_sample
             for i in range(limit):
-                base = i * 4
-                word = (
-                    raw[base]
-                    | (raw[base + 1] << 8)
-                    | (raw[base + 2] << 16)
-                    | (raw[base + 3] << 24)
-                )
-                if word & 0x80000000:
-                    word -= 0x100000000
-
-                # SPH0645 typically provides left-justified signed audio in 32-bit words.
-                # Shift down to signed 16-bit to keep preprocessing memory-friendly.
-                sample = word >> 14
-                if sample > 32767:
-                    sample = 32767
-                elif sample < -32768:
-                    sample = -32768
-
-                target_samples[sample_index] = sample
+                target_samples[sample_index] = self._decode_sample(raw, i * bytes_per_sample)
                 sample_index += 1
-                if sample_index >= total_samples:
+                if sample_index >= len(target_samples):
                     break
+
+    def read_frame(self):
+        samples = create_sample_buffer()
+        self.capture_into(samples)
+        return samples
 
 
 def create_sample_buffer():

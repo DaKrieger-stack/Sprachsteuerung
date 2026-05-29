@@ -1,32 +1,35 @@
-from machine import Pin
+from machine import CAN, Pin
 
 import config
 
 
 class OutputControl:
     def __init__(self):
-        self._blinker_links = Pin(config.PIN_BLINKER_LINKS, Pin.OUT, value=0)
-        self._blinker_rechts = Pin(config.PIN_BLINKER_RECHTS, Pin.OUT, value=0)
-        self._innenlicht = Pin(config.PIN_INNENLICHT, Pin.OUT, value=0)
-        self._licht = Pin(config.PIN_LICHT, Pin.OUT, value=0)
+        self._state = 0
+        self._can = CAN(
+            config.CAN_ID,
+            tx=Pin(config.CAN_TX_PIN),
+            rx=Pin(config.CAN_RX_PIN),
+            baudrate=config.CAN_BAUDRATE,
+            mode=CAN.NORMAL,
+        )
 
-    def blinker_links(self):
-        self._blinker_links.value(1)
-        self._blinker_rechts.value(0)
+    def apply(self, command_label):
+        if command_label == config.COMMAND_ON:
+            self.licht_an()
+        elif command_label == config.COMMAND_OFF:
+            self.licht_aus()
 
-    def blinker_rechts(self):
-        self._blinker_rechts.value(1)
-        self._blinker_links.value(0)
-
-    def innenlicht_an(self):
-        self._innenlicht.value(1)
-
-    def innenlicht_aus(self):
-        self._innenlicht.value(0)
+    def _send_light_state(self, payload):
+        self._can.send(payload, config.CAN_ARB_ID_LIGHT)
 
     def licht_an(self):
-        self._licht.value(1)
+        self._send_light_state(config.CAN_PAYLOAD_LIGHT_ON)
+        self._state = 1
 
     def licht_aus(self):
-        self._licht.value(0)
+        self._send_light_state(config.CAN_PAYLOAD_LIGHT_OFF)
+        self._state = 0
 
+    def state(self):
+        return self._state
