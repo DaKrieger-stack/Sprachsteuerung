@@ -1,8 +1,0 @@
-# Runtime target: MicroPython on ESP32
-# Required modules are provided by the firmware:
-# - machine
-# - micropython
-# - json
-# - time
-# - gc
-
