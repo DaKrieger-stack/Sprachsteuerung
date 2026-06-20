@@ -12,3 +12,4 @@ sdkconfig
 sdkconfig.old
 sdkconfig.*
 !sdkconfig.defaults
+docs/html/
